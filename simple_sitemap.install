@@ -1,0 +1,143 @@
+<?php
+/**
+ * @file
+ * Module install and update procedures.
+ */
+
+use Drupal\simple_sitemap\Simplesitemap;
+
+/**
+ * Implements hook_requirements().
+ */
+function simple_sitemap_requirements($phase) {
+  $requirements = [];
+
+  if (!extension_loaded('xmlwriter')) {
+    $requirements['simple_sitemap_php_extensions'] = [
+      'title' => t('Simple XML sitemap PHP extensions'),
+      'value' => t('Missing PHP xmlwriter extension'),
+      'description' => t("In order to be able to generate sitemaps, the Simple XML sitemap module requires the <em>xmlwriter</em> PHP extension to be enabled."),
+      'severity' => REQUIREMENT_ERROR,
+    ];
+  }
+
+  switch ($phase) {
+    case 'runtime':
+      $generator = new Simplesitemap();
+      $generated_ago = $generator->getGeneratedAgo();
+      if (!$generated_ago) {
+        $value = t('Not available');
+        $description = t("The sitemap has not been generated yet. Run cron, or <a href='@generate'>generate</a> the sitemap manually.",
+          ['@generate' => $GLOBALS['base_url'] . '/admin/config/search/simplesitemap']);
+        $severity = REQUIREMENT_WARNING;
+      }
+      else {
+        $value = t('XML sitemap is available');
+        $description = t("The <a href='@sitemap'>XML sitemap</a> was generated @ago ago. <a href='@generate'>Regenerate</a>.",
+          [
+            '@ago' => $generated_ago,
+            '@sitemap' => $GLOBALS['base_url'] . '/sitemap.xml',
+            '@generate' => $GLOBALS['base_url'] . '/admin/config/search/simplesitemap',
+          ]);
+        $severity = REQUIREMENT_INFO;
+      }
+      $requirements['simple_sitemap_generated'] = [
+        'title' => 'Simple XML sitemap',
+        'value' => $value,
+        'description' => $description,
+        'severity' => $severity,
+      ];
+      break;
+  }
+  return $requirements;
+}
+
+/**
+ * Implements hook_schema().
+ */
+function simple_sitemap_schema() {
+  $schema['simple_sitemap'] = [
+    'description' => 'Holds XML sitemaps as strings for quick retrieval.',
+    'fields' => [
+      'id' => [
+        'description' => 'Sitemap chunk unique identifier.',
+        'type' => 'int',
+        'size' => 'small',
+        'not null' => TRUE,
+      ],
+      'sitemap_string' => [
+        'description' => 'XML sitemap chunk string.',
+        'type' => 'text',
+        'size' => 'big',
+        'not null' => TRUE,
+      ],
+      'sitemap_created' => [
+        'description' => 'Timestamp of sitemap chunk generation.',
+        'type' => 'int',
+        'default' => 0,
+        'not null' => TRUE,
+      ],
+    ],
+    'primary key' => ['id'],
+  ];
+  return $schema;
+}
+
+/**
+ * Implements hook_install().
+ */
+function simple_sitemap_install() {
+  $config = [
+    'custom' => [
+      'path' => '/',
+      'priority' => '1.0',
+    ],
+    'entity_types' => [
+      'node' => [],
+      'taxonomy_term' => [],
+//      'menu_link_content' => [],
+    ],
+  ];
+
+  $config['settings'] = [
+    'max_links' => 2000,
+    'cron_generate' => TRUE,
+    'remove_duplicates' => TRUE,
+    'batch_process_limit' => 1500,
+  ];
+
+  variable_set('simple_sitemap', $config);
+
+  $generator = new Simplesitemap($config);
+//  $generator->generateSitemap('nobatch');
+  $base_url = $GLOBALS['base_url'];
+  drupal_set_message(t("You can now include content into the <a href='@sitemap_url' target='_blank'>XML sitemap</a> by visiting the corresponding entity type edit pages (e.g. <a href='@content_type_url' target='_blank'>node type edit pages</a>) These settings can then be overridden for single entities.<br/> Support for additional entity types and custom links can be added on <a href='@config_url' target='_blank'>the module's configuration pages</a>.",
+    [
+      '@sitemap_url' => "$base_url/sitemap.xml",
+      '@content_type_url' => "$base_url/admin/structure/types",
+      '@config_url' => "$base_url/admin/config/search/simplesitemap",
+    ]));
+}
+
+/**
+ * Changing the data structure of the module's configuration.
+ */
+function simple_sitemap_update_8201() {
+  $entity_types = \Drupal::config('simple_sitemap.settings')->get('entity_types');
+  $entity_types = is_array($entity_types) ? $entity_types : [];
+  $naming_changes = [
+    'node_type' => 'node',
+    'taxonomy_vocabulary' => 'taxonomy_term',
+//    'menu' => 'menu_link_content',
+//    'commerce_product_type' => 'commerce_product',
+    'media_bundle' => 'media',
+  ];
+  foreach ($entity_types as $entity_type_name => $settings) {
+    if (isset($naming_changes[$entity_type_name])) {
+      $entity_types[$naming_changes[$entity_type_name]] = $entity_types[$entity_type_name];
+      unset($entity_types[$entity_type_name]);
+    }
+  }
+  \Drupal::service('config.factory')->getEditable('simple_sitemap.settings')
+    ->set('entity_types', $entity_types)->save();
+}

@@ -1,0 +1,8 @@
+name = Simple XML Sitemap
+description = Creates a standard conform XML sitemap of your content.
+package = SEO
+core = 7.x
+
+configure = admin/config/search/simple_sitemap
+
+dependencies[] = xautoload (>= 7.x-5.0)

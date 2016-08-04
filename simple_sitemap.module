@@ -1,0 +1,264 @@
+<?php
+/**
+ * @file
+ * Main module file containing hooks.
+ */
+
+use Drupal\simple_sitemap\Controller\SimplesitemapController;
+use Drupal\simple_sitemap\Form;
+use Drupal\simple_sitemap\Simplesitemap;
+
+/**
+ * Implements hook_help.
+ */
+function simple_sitemap_help($path, $arg) {
+  return $path === 'admin/help#simple_sitemap' ? check_markup(file_get_contents(__DIR__ . "/README.txt")) : NULL;
+}
+
+/**
+ * Implements hook_form_alter.
+ *
+ * Adds sitemap settings to entity types that are supported via plugins.
+ */
+function simple_sitemap_form_alter(&$form, $form_state, $form_id) {
+  //@todo:
+  return;
+
+  $f = new Form($form_state);
+  if (!$f->alteringForm) {
+    return;
+  }
+
+  $form['simple_sitemap'] = [
+    '#type' => 'fieldset',
+    '#group' => isset($form['additional_settings']) ? 'additional_settings' : 'advanced',
+    '#title' => t('Simple XML sitemap'),
+    '#description' => $f->entityCategory == 'instance' ? t('Settings for this entity can be overridden here.') : '',
+  ];
+  // Attach some js magic to forms.
+  if ($f->entityTypeId != 'comment' || $f->entityCategory != 'instance') // todo: JS not working on comment entity form, hence disabling.
+  {
+    $form['#attached']['library'][] = 'simple_sitemap/form';
+  }
+  // Only attach fieldset summary js to 'additional settings' vertical tabs.
+  if (isset($form['additional_settings'])) {
+    $form['#attached']['library'][] = 'simple_sitemap/fieldsetSummaries';
+  }
+  $f->displayEntitySettings($form['simple_sitemap']);
+  $f->displayRegenerateNow($form['simple_sitemap']); // todo: do not show setting when creating new bundle
+
+  // Add submission handler.
+  if (isset($form['actions']['submit']['#submit'])) {
+    foreach (array_keys($form['actions']) as $action) {
+      if ($action != 'preview' && isset($form['actions'][$action]['#type']) && $form['actions'][$action]['#type'] === 'submit') {
+        $form['actions'][$action]['#submit'][] = 'simple_sitemap_entity_form_submit';
+      }
+    }
+  }
+  else { // Fix for account page rendering other submit handlers not usable.
+    $form['#submit'][] = 'simple_sitemap_entity_form_submit';
+  }
+}
+
+/**
+ * Form submission handler called in hook_form_alter.
+ */
+function simple_sitemap_entity_form_submit($form, &$form_state) {
+
+  $values = $form_state['values'];
+
+  // Fix for values appearing in a sub array on a commerce product entity.
+  $values = isset($values['simple_sitemap']) ? $values['simple_sitemap'] : $values;
+
+  // Only make changes in DB if sitemap settings actually changed.
+  if (Form::valuesChanged($form, $values)) {
+    $generator = \Drupal::service('simple_sitemap.generator');
+    $f = new Form($form_state);
+
+    switch ($f->entityCategory) {
+
+      case 'bundle':
+        $f->bundleName = !empty($f->bundleName) ? $f->bundleName : $f->getFormEntityId();
+        $generator->setBundleSettings($f->entityTypeId, $f->bundleName,
+          ['index' => $values['simple_sitemap_index_content'], 'priority' => $values['simple_sitemap_priority']]);
+        break;
+
+      case 'instance':
+        $f->instanceId = !empty($f->instanceId) ? $f->instanceId : $f->getFormEntityId();
+        $generator->setEntityInstanceSettings($f->entityTypeId, $f->instanceId,
+          ['index' => $values['simple_sitemap_index_content'], 'priority' => $values['simple_sitemap_priority']]);
+        break;
+    }
+
+    // Regenerate sitemaps according to user setting.
+    if ($values['simple_sitemap_regenerate_now']) {
+      $generator->generateSitemap();
+    }
+  }
+}
+
+/**
+ * Implements hook_cron().
+ */
+function simple_sitemap_cron() {
+  $generator = new Simplesitemap();
+  if ($generator->getSetting('cron_generate')) {
+    $generator->generateSitemap('backend');
+  }
+}
+
+/**
+ * Implements hook_entity_bundle_delete().
+ *
+ * Removes settings of the removed bundle.
+ *
+ * @todo Not working for menu bundles, as they are technically not bundles. Implement hook_menu_delete().
+ */
+function simple_sitemap_entity_bundle_delete($entity_type_id, $bundle) {
+//  $generator = new Simplesitemap();
+//  $entity_types = $generator->getConfig('entity_types');
+//  if (isset($entity_types[$entity_type_id][$bundle])) {
+//    unset($entity_types[$entity_type_id][$bundle]);
+//    $generator->saveConfig('entity_types', $entity_types);
+//    $message = t("You may want to <a href='@url'>regenerate</a> your XML sitemap now.", ['@url' => $GLOBALS['base_url'] . '/admin/config/search/simplesitemap']);
+//    if ($generator->getSetting('cron_generate')) {
+//      $message .= '</br>' . t('Otherwise the sitemap will be regenerated on the next cron run.');
+//    }
+////    drupal_set_message($message); // todo: Commented out, as html code is visible.
+//  }
+}
+
+/**
+ * Implements hook_entity_delete().
+ *
+ * Removes settings of the removed entity.
+ */
+function simple_sitemap_entity_delete($entity, $type) {
+//  $generator = new Simplesitemap();
+//  $entity_types = $generator->getConfig('entity_types');
+//  $bundle_name = !empty($entity->bundle()) ? $entity->bundle() : $type;
+//  if (isset($entity_types[$type][$bundle_name]['entities'][$entity->id()])) {
+//    unset($entity_types[$type][$bundle_name]['entities'][$entity->id()]);
+//    $generator->saveConfig('entity_types', $entity_types);
+//  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function simple_sitemap_menu() {
+  $items['sitemap.xml'] = [
+    'page callback' => 'simple_sitemap_get_xml',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  ];
+
+  $items['sitemaps/%/sitemap.xml'] = [
+    'page arguments' => [1],
+    'page callback' => 'simple_sitemap_get_xml_chunk',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  ];
+
+  $items['admin/config/search/simple_sitemap'] = [
+    'title' => 'Simple XML sitemap',
+    'description' => 'Configure and generate the XML sitemap, add custom links to it.',
+    'page arguments' => ['simple_sitemap_settings'],
+    'page callback' => 'drupal_get_form',
+    'access arguments' => ['administer sitemap settings'],
+    'file' => 'simple_sitemap.admin.inc',
+    'type' => MENU_NORMAL_ITEM,
+  ];
+
+  $items['admin/config/search/simple_sitemap/settings'] = [
+    'title' => 'Settings',
+    'file' => 'simple_sitemap.admin.inc',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -1,
+  ];
+
+  $items['admin/config/search/simple_sitemap/entities'] = [
+    'title' => 'Sitemap entities',
+    'page arguments' => ['simple_sitemap_settings_entities'],
+    'page callback' => 'drupal_get_form',
+    'access arguments' => ['administer sitemap settings'],
+    'file' => 'simple_sitemap.admin.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 1,
+  ];
+
+  $items['admin/config/search/simple_sitemap/custom_links'] = [
+    'title' => 'Custom links',
+    'page arguments' => ['simple_sitemap_settings_custom'],
+    'page callback' => 'drupal_get_form',
+    'access arguments' => ['administer sitemap settings'],
+    'file' => 'simple_sitemap.admin.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 2,
+  ];
+
+  return $items;
+}
+
+function simple_sitemap_get_xml() {
+  $generator = new Simplesitemap();
+  $controller = new SimplesitemapController($generator);
+
+  drupal_add_http_header('Content-type', 'application/xml; charset=utf-8');
+  drupal_add_http_header('X-Robots-Tag', 'noindex, follow');
+
+  print $controller->getSitemap();
+  exit;
+}
+
+function simple_sitemap_get_xml_chunk($chunk_id) {
+  $generator = new Simplesitemap();
+  $controller = new SimplesitemapController($generator);
+
+  drupal_add_http_header('Content-type', 'application/xml; charset=utf-8');
+  drupal_add_http_header('X-Robots-Tag', 'noindex, follow');
+
+  print $controller->getSitemap($chunk_id);
+  exit;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function simple_sitemap_permission() {
+  return [
+    'administer sitemap settings' => [
+      'title' => t('Administer sitemap settings'),
+      'description' => t('Administer Simple XML sitemap settings, alter inclusion and priority of content and generate the sitemap on demand.'),
+    ],
+  ];
+}
+
+function simple_sitemap_is_valid_url($url, $absolute = FALSE) {
+  if ($absolute) {
+    return (bool) preg_match("
+        /^                                                      # Start at the beginning of the text
+        (?:ftp|https?|feed):\/\/                                # Look for ftp, http, https or feed schemes
+        (?:                                                     # Userinfo (optional) which is typically
+          (?:(?:[\w\.\-\+!$&'\(\)*\+,;=]|%[0-9a-f]{2})+:)*      # a username or a username and password
+          (?:[\w\.\-\+%!$&'\(\)*\+,;=]|%[0-9a-f]{2})+@          # combination
+        )?
+        (?:
+          (?:[a-z0-9\-\.]|%[0-9a-f]{2})+                        # A domain name or a IPv4 address
+          |(?:\[(?:[0-9a-f]{0,4}:)*(?:[0-9a-f]{0,4})\])         # or a well formed IPv6 address
+        )
+        (?::[0-9]+)?                                            # Server port number (optional)
+        (?:[\/|\?]
+          (?:[\w#!:\.\?\+=&@$'~*,;\/\(\)\[\]\-]|%[0-9a-f]{2})   # The path and query (optional)
+        *)?
+      $/xi", $url);
+  }
+  else {
+    return (bool) preg_match("/^(?:[\w#!:\.\?\+=&@$'~*,;\/\(\)\[\]\-]|%[0-9a-f]{2})+$/i", $url);
+  }
+}
+
+function simple_sitemap_check_url($url, $options = []) {
+  $response = drupal_http_request($url, $options);
+  return !in_array($response->code, [402, 403, 404, 500]);
+}
